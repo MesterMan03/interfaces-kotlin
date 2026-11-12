@@ -1,5 +1,9 @@
 # `interfaces-kotlin`
 
+MESTER's maintained fork of [Noxcrew/interfaces-kotlin](https://github.com/Noxcrew/interfaces-kotlin).
+See [managed inventories](MANAGED_INVENTORIES.md) for the opt-in storage implementation and its current limits,
+and [publishing](PUBLISHING.md) for Maven Central setup and release instructions.
+
 ![](https://img.shields.io/github/license/noxcrew/interfaces-kotlin.svg?style=flat-square)
 ![](https://img.shields.io/github/actions/workflow/status/noxcrew/interfaces-kotlin/build.yml?logo=github&style=flat-square)
 ![](https://dcbadge.limes.pink/api/server/mcc?style=flat-square)
@@ -30,19 +34,21 @@ A transformation ("transform") operates on a type of pane to add, remove, or cha
 with panes.
 
 ## Usage
-Interfaces can be found on our [public Maven repository](https://maven.noxcrew.com/#/public/com/noxcrew/interfaces) and added to a Maven project as follows:
+This fork publishes as `info.mester.interfaces:interfaces`; its API module is a transitive dependency.
+Releases resolve from Maven Central. Development snapshots additionally use the Central snapshot repository:
 
 ```xml
 <repository>
-    <id>noxcrew-maven</id>
-    <name>Noxcrew Public Maven Repository</name>
-    <url>https://maven.noxcrew.com/public</url>
+    <id>central-snapshots</id>
+    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+    <releases><enabled>false</enabled></releases>
+    <snapshots><enabled>true</enabled></snapshots>
 </repository>
 
 <dependency>
-  <groupId>com.noxcrew.interfaces</groupId>
+  <groupId>info.mester.interfaces</groupId>
   <artifactId>interfaces</artifactId>
-  <version>REPLACE_WITH_CURRENT_INTERFACES_VERSION</version>
+  <version>2.2.0-mester.1-SNAPSHOT</version>
 </dependency>
 ```
 

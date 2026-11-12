@@ -1,0 +1,60 @@
+name: Publish to Maven Central
+
+on:
+  push:
+    branches: [main]
+    paths: [gradle.properties]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-interfaces-packages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'MesterMan03/interfaces-kotlin'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect library version change
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^interfaces_version=//p' gradle.properties | tr -d '\r')"
+          test -n "$current"
+          changed=false
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            changed=true
+          elif git cat-file -e "$BEFORE_SHA:gradle.properties" 2>/dev/null; then
+            previous="$(git show "$BEFORE_SHA:gradle.properties" | sed -n 's/^interfaces_version=//p' | tr -d '\r')"
+            [[ "$current" != "$previous" ]] && changed=true
+          else
+            changed=true
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v5
+        if: steps.version.outputs.changed == 'true'
+        with:
+          java-version: 25
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.version.outputs.changed == 'true'
+      - run: chmod +x gradlew
+        if: steps.version.outputs.changed == 'true'
+      - name: Build and publish both modules
+        if: steps.version.outputs.changed == 'true'
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+        run: ./gradlew clean spotlessCheck build publishInterfacesPackages
