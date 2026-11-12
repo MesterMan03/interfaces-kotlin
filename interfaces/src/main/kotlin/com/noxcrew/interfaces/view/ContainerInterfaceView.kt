@@ -2,6 +2,8 @@ package com.noxcrew.interfaces.view
 
 import com.noxcrew.interfaces.InterfacesListeners
 import com.noxcrew.interfaces.element.CompletedElement
+import com.noxcrew.interfaces.exception.InterfacesExceptionContext
+import com.noxcrew.interfaces.exception.InterfacesOperation
 import com.noxcrew.interfaces.grid.GridPoint
 import com.noxcrew.interfaces.interfaces.ContainerInterface
 import com.noxcrew.interfaces.interfaces.PlayerInventoryType
@@ -9,6 +11,7 @@ import com.noxcrew.interfaces.inventory.CachedInterfacesInventory
 import com.noxcrew.interfaces.inventory.ContainerInterfacesInventory
 import com.noxcrew.interfaces.inventory.FakedContainerInterfacesInventory
 import com.noxcrew.interfaces.pane.ContainerPane
+import com.noxcrew.interfaces.transfer.InventorySession
 import com.noxcrew.interfaces.utilities.TitleState
 import io.papermc.paper.adventure.PaperAdventure
 import net.kyori.adventure.text.Component
@@ -22,6 +25,7 @@ import net.minecraft.world.inventory.MenuType
 import org.bukkit.craftbukkit.entity.CraftPlayer
 import org.bukkit.craftbukkit.event.CraftEventFactory
 import org.bukkit.entity.Player
+import org.bukkit.event.inventory.InventoryCloseEvent
 import org.bukkit.inventory.Inventory
 import org.bukkit.inventory.InventoryHolder
 import org.bukkit.inventory.ItemStack
@@ -52,6 +56,35 @@ public class ContainerInterfaceView<I : ContainerInterface<I, P>, P : ContainerP
     override val titleState: TitleState = TitleState(initialSupplier = backing.titleSupplier)
 
     private val managedSlots = linkedSetOf<GridPoint>()
+    private val itemSession = InventorySession<Contents> { it.detached() }
+
+    private data class Contents(val top: Map<GridPoint, ItemStack?>, val player: List<ItemStack?>) {
+        fun detached(): Contents = Contents(top.mapValues { it.value?.clone() }, player.map { it?.clone() })
+    }
+
+    private fun contents(): Contents = Contents(managedContents(), player.inventory.contents.map { it?.clone() })
+
+    /** Flushes actual mutations before another domain operation can read a stale offer, recipe, or storage snapshot. */
+    public fun flushItemChanges() {
+        if (!backing.builder.manageItems) return
+        val change = itemSession.update(contents()) ?: return
+        executeSync(InterfacesExceptionContext(player, InterfacesOperation.RUNNING_CLICK_HANDLER, this)) {
+            if (change.before.top != change.after.top) {
+                backing.builder.onItemsCommitted(this, change.before.top, change.after.top)
+            }
+            backing.builder.onItemsChanged(this)
+        }
+    }
+
+    override fun onOpen() {
+        super.onOpen()
+        if (!itemSession.isOpen) {
+            executeSync(InterfacesExceptionContext(player, InterfacesOperation.RUNNING_CLICK_HANDLER, this)) {
+                backing.builder.onOpened(this)
+            }
+            itemSession.open(contents())
+        }
+    }
 
     /** Whether [slot] in the top inventory belongs to item storage rather than the UI renderer. */
     public fun isManagedSlot(slot: Int): Boolean = GridPoint.fromBukkitChestSlot(slot) in managedSlots
@@ -72,7 +105,12 @@ public class ContainerInterfaceView<I : ContainerInterface<I, P>, P : ContainerP
     }
 
     /** Called before the old inventory is retired so a delayed coroutine cannot drain a subsequently reopened view. */
-    internal fun returnManagedItems() {
+    internal fun returnManagedItems(reason: InventoryCloseEvent.Reason) {
+        flushItemChanges()
+        if (!itemSession.close()) return
+        executeSync(InterfacesExceptionContext(player, InterfacesOperation.CLOSE_HANDLER, this)) {
+            backing.builder.onClosed(reason, this)
+        }
         if (!backing.builder.manageItems || !backing.builder.returnManagedItemsOnClose) return
         for (item in drainManagedItems().values) {
             for (leftover in player.inventory.addItem(item).values) {
@@ -108,6 +146,7 @@ public class ContainerInterfaceView<I : ContainerInterface<I, P>, P : ContainerP
                 rows = backing.rows,
                 includesPlayerInventory = backing.includesPlayerInventory,
                 mapper = backing.mapper,
+                inventoryType = backing.builder.inventoryType,
             )
         }
         for ((point, item) in retained) created.set(point.x, point.y, item)

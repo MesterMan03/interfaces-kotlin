@@ -68,6 +68,9 @@ import kotlin.time.Duration
 public class InterfacesListeners private constructor(private val plugin: Plugin) : Listener {
 
     public companion object {
+        /** Plugin-wide item locks, also applied to indirect transfers such as double-click collection. */
+        public var itemTransferAllowed: (ItemStack) -> Boolean = { true }
+
         /** The current instance for interface listeners class. */
         public lateinit var INSTANCE: InterfacesListeners
             private set
@@ -329,7 +332,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         // are currently opening this view!
         val openView = openInventory[event.player]
         if (openView != null && openView != view) {
-            (openView as? ContainerInterfaceView<*, *>)?.returnManagedItems()
+            (openView as? ContainerInterfaceView<*, *>)?.returnManagedItems(Reason.OPEN_NEW)
             // If the previously opened view is a player interface, attempt to demote it to
             // the background interface and gracefully close it while marking it as re-openable
             // again after we're done.
@@ -398,7 +401,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         // Mark whatever inventory was open as closed!
         val opened = openInventory.remove(event.player)
         if (opened != null) {
-            (opened as? ContainerInterfaceView<*, *>)?.returnManagedItems()
+            (opened as? ContainerInterfaceView<*, *>)?.returnManagedItems(reason)
             opened.markClosed(SCOPE, reason)
         } else if (reason in REOPEN_REASONS && !event.player.isDead) {
             // If the opened menu didn't trigger a re-open, do it manually! This is necessary if it wasn't
@@ -420,6 +423,15 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         val clickedPoint =
             view.backing.mapper.toGridPoint(if (mainView == null) (event.rawSlot - event.inventory.size + 9) else event.rawSlot) ?: return
         val isPlayerInventory = (event.clickedInventory ?: event.inventory).getHolder(false) is Player
+        if (view is ContainerInterfaceView<*, *> && isPlayerInventory) {
+            view.backing.builder.onPlayerInventoryClick?.let { select ->
+                event.isCancelled = true
+                view.executeSync(InterfacesExceptionContext(view.player, InterfacesOperation.RUNNING_CLICK_HANDLER, view)) {
+                    select(view, event.slot, event.currentItem?.clone(), event.click)
+                }
+                return
+            }
+        }
 
         // Run base click handling
         if (handleClick(
@@ -598,6 +610,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     public fun onManagedClick(event: InventoryClickEvent) {
         val view = determineInventoryHolder(event.inventory) as? ContainerInterfaceView<*, *> ?: return
         if (!view.backing.builder.manageItems) return
+        view.flushItemChanges()
         if (event.rawSlot < 0) return
         if (event.rawSlot >= event.view.topInventory.size || view.isManagedSlot(event.rawSlot) || event.click == ClickType.DOUBLE_CLICK) {
             managedInteractions.click(event, view)
@@ -625,7 +638,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     public fun onPlayerQuit(event: PlayerQuitEvent) {
         val playerId = event.player.uniqueId
         openInventory.remove(event.player)?.also {
-            (it as? ContainerInterfaceView<*, *>)?.returnManagedItems()
+            (it as? ContainerInterfaceView<*, *>)?.returnManagedItems(Reason.DISCONNECT)
             it.markClosed(SCOPE, Reason.DISCONNECT)
         }
         abortQuery(playerId, null)
@@ -843,7 +856,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         }
 
         // Automatically cancel if throttling or already processing
-        if (view.isProcessingClick || shouldThrottle(view.player)) {
+        if (view.isProcessingClick || (view.builder.throttleClicks && shouldThrottle(view.player))) {
             return true
         }
 

@@ -4,7 +4,9 @@ import com.noxcrew.interfaces.grid.mapping.ContainerGridMapper
 import com.noxcrew.interfaces.grid.mapping.GridMapper.PlayerInventory.Companion.PLAYER_INV_PLUS_HOTBAR_ROWS
 import com.noxcrew.interfaces.utilities.createBukkitInventory
 import net.kyori.adventure.text.Component
+import org.bukkit.Bukkit
 import org.bukkit.entity.Player
+import org.bukkit.event.inventory.InventoryType
 import org.bukkit.inventory.Inventory
 import org.bukkit.inventory.InventoryHolder
 import org.bukkit.inventory.ItemStack
@@ -18,11 +20,18 @@ public class ContainerInterfacesInventory(
     private val rows: Int,
     private val includesPlayerInventory: Boolean,
     private val mapper: ContainerGridMapper,
+    inventoryType: InventoryType = InventoryType.CHEST,
 ) : CachedInterfacesInventory() {
     private val playerInventory = player.inventory
 
     /** The [chestInventory] being used to place items in. */
-    public val chestInventory: Inventory = createBukkitInventory(holder, rows, title)
+    public val chestInventory: Inventory = if (inventoryType == InventoryType.CHEST) {
+        createBukkitInventory(holder, rows, title)
+    } else if (title == null) {
+        Bukkit.createInventory(holder, inventoryType)
+    } else {
+        Bukkit.createInventory(holder, inventoryType, title)
+    }
 
     override fun get(row: Int, column: Int): ItemStack? {
         if (includesPlayerInventory) {

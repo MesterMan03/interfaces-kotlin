@@ -6,7 +6,11 @@ import com.noxcrew.interfaces.utilities.gridPointToBukkitIndex
 import com.noxcrew.interfaces.utilities.iterateForEachInGrid
 
 /** Handles [com.noxcrew.interfaces.grid.GridPoint] mapping for containers. */
-public open class ContainerGridMapper(private val rows: Int, private val includesPlayerInventory: Boolean) :
+public open class ContainerGridMapper(
+    private val rows: Int,
+    private val includesPlayerInventory: Boolean,
+    private val topInventorySize: Int = rows * 9,
+) :
     AbstractGridMapper(),
     GridMapper.TopInventory,
     GridMapper.PlayerInventory {
@@ -24,7 +28,7 @@ public open class ContainerGridMapper(private val rows: Int, private val include
             iterateForEachInGrid(rows + PLAYER_INV_PLUS_HOTBAR_ROWS, COLUMNS_IN_CHEST, function)
             function(rows + 4, 0)
         } else {
-            iterateForEachInGrid(rows, COLUMNS_IN_CHEST, function)
+            for (slot in 0 until topInventorySize) function(slot / COLUMNS_IN_CHEST, slot % COLUMNS_IN_CHEST)
         }
     }
 

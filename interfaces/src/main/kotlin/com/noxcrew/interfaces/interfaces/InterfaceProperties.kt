@@ -72,6 +72,9 @@ public open class InterfaceProperties<P : Pane> {
     /** Whether clicking on empty slots should be fully cancelled. */
     public var preventClickingEmptySlots: Boolean = true
 
+    /** Whether UI callback clicks use the navigation spam throttle; synchronous crafting controls can disable it. */
+    public var throttleClicks: Boolean = true
+
     // --- ITEM PERSISTENCE ---
     /**
      * Persists items added to this pane in a previous instance.
