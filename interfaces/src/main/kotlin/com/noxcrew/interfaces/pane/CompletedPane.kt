@@ -7,6 +7,7 @@ import com.noxcrew.interfaces.grid.GridMap
 import com.noxcrew.interfaces.grid.GridPoint
 import com.noxcrew.interfaces.grid.HashGridMap
 import com.noxcrew.interfaces.grid.mapping.GridMapper
+import com.noxcrew.interfaces.view.InterfaceView
 import org.bukkit.entity.Player
 
 /** A grid map of completed elements. */
@@ -15,20 +16,19 @@ public open class CompletedPane : GridMap<CompletedElement> by HashGridMap() {
 }
 
 /** Completes a pane for [player] by drawing each element while suspending. */
-internal suspend fun Pane.complete(player: Player): CompletedPane {
+internal suspend fun Pane.complete(player: Player, view: InterfaceView): CompletedPane {
     val pane = CompletedPane()
-
     forEachSuspending { row, column, element ->
-        pane[row, column] = element.complete(player)
+        pane[row, column] = element.complete(player, view)
     }
-
     return pane
 }
 
 /** Creates a completed pane with empty elements. */
-internal fun createEmptyPane(mapper: GridMapper, allowClickingEmptySlots: Boolean): CompletedPane {
+internal fun createEmptyPane(mapper: GridMapper, triggerClickEventsForEmptySlots: Boolean, isEmptySlotModifiable: Boolean): CompletedPane {
     val pane = CompletedPane()
-    val airElement = CompletedElement(null, if (allowClickingEmptySlots) ClickHandler.EMPTY else null)
+    val airElement =
+        CompletedElement(null, if (triggerClickEventsForEmptySlots) ClickHandler.EMPTY else null, isSlotModifiable = isEmptySlotModifiable)
     mapper.forEachInGrid { row, column ->
         pane[row, column] = airElement
     }

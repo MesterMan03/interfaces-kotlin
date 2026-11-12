@@ -3,11 +3,13 @@ package com.noxcrew.interfaces.example
 import com.noxcrew.interfaces.InterfacesListeners
 import com.noxcrew.interfaces.drawable.Drawable.Companion.drawable
 import com.noxcrew.interfaces.element.StaticElement
+import com.noxcrew.interfaces.interfaces.PlayerInventoryType
 import com.noxcrew.interfaces.interfaces.buildChestInterface
 import com.noxcrew.interfaces.interfaces.buildCombinedInterface
 import com.noxcrew.interfaces.interfaces.buildPlayerInterface
+import com.noxcrew.interfaces.inventory.clearInventory
 import com.noxcrew.interfaces.properties.interfaceProperty
-import com.noxcrew.interfaces.utilities.forEachInGrid
+import com.noxcrew.interfaces.utilities.iterateForEachInGrid
 import kotlinx.coroutines.runBlocking
 import org.bukkit.Bukkit
 import org.bukkit.Material
@@ -30,7 +32,8 @@ public class ExamplePlugin : JavaPlugin(), Listener {
             ChangingTitleExampleInterface(),
             CatalogueExampleInterface(),
             MovingExampleInterface(),
-            TabbedExampleInterface()
+            TabbedExampleInterface(),
+            ModifableAreaExampleInterface()
         )
     }
 
@@ -46,7 +49,7 @@ public class ExamplePlugin : JavaPlugin(), Listener {
                 suspendingHandler {
                     val player = it.sender() as Player
                     InterfacesListeners.INSTANCE.getOpenPlayerInterface(player.uniqueId)?.close()
-                    player.inventory.clear()
+                    player.clearInventory()
                 }
             }
 
@@ -67,7 +70,16 @@ public class ExamplePlugin : JavaPlugin(), Listener {
                 suspendingHandler {
                     val player = it.sender() as Player
                     val combinedInterface = combinedInterface()
+                    combinedInterface.open(player)
+                }
+            }
 
+            registerCopy {
+                literal("fake")
+
+                suspendingHandler {
+                    val player = it.sender() as Player
+                    val combinedInterface = combinedInterface(PlayerInventoryType.FAKE)
                     combinedInterface.open(player)
                 }
             }
@@ -141,8 +153,8 @@ public class ExamplePlugin : JavaPlugin(), Listener {
         }
 
         withTransform { pane, _ ->
-            forEachInGrid(6, 9) { row, column ->
-                if (pane.has(row, column)) return@forEachInGrid
+            iterateForEachInGrid(6, 9) { row, column ->
+                if (pane.has(row, column)) return@iterateForEachInGrid
 
                 val item = ItemStack(Material.WHITE_STAINED_GLASS_PANE)
                     .name("row: $row, column: $column")
@@ -163,7 +175,7 @@ public class ExamplePlugin : JavaPlugin(), Listener {
         withTransform { pane, _ ->
             val item = ItemStack(Material.COMPASS).name("interfaces example")
 
-            forEachInGrid(3, 9) { row, column ->
+            iterateForEachInGrid(3, 9) { row, column ->
                 val item = ItemStack(Material.WHITE_STAINED_GLASS_PANE)
                     .name("row: $row, column: $column")
 
@@ -171,7 +183,7 @@ public class ExamplePlugin : JavaPlugin(), Listener {
                     player.sendMessage("row: $row, column: $column")
                 }
             }
-            forEachInGrid(1, 9) { _, column ->
+            iterateForEachInGrid(1, 9) { _, column ->
                 val item = ItemStack(Material.WHITE_STAINED_GLASS_PANE)
                     .name("hotbar, column: $column")
 
@@ -200,11 +212,12 @@ public class ExamplePlugin : JavaPlugin(), Listener {
         }
     }
 
-    private fun combinedInterface() = buildCombinedInterface {
+    private fun combinedInterface(type: PlayerInventoryType = PlayerInventoryType.OVERRIDE) = buildCombinedInterface {
         rows = 6
+        playerInventoryType = type
 
         withTransform { pane, _ ->
-            forEachInGrid(10, 9) { row, column ->
+            iterateForEachInGrid(10, 9) { row, column ->
                 val item = ItemStack(Material.WHITE_STAINED_GLASS_PANE)
                     .name("row: $row, column: $column")
 

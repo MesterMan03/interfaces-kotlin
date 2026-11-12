@@ -16,7 +16,8 @@ public class AppliedTransform<P : Pane>(
     internal val refresh: RefreshMode,
     internal val priority: Int,
     internal val triggers: Set<Trigger>,
-    internal val backing: Transform<P>,
+    /** The backing transform of this applied transform. */
+    public val backing: Transform<P>,
 ) : Transform<P> by backing {
 
     /** Stores different pre-completed states of this pane for different values of a stateful transform. */
@@ -53,15 +54,16 @@ public class AppliedTransform<P : Pane>(
             paneStates[value ?: return@let null]
         } ?: withTimeout(builder.defaultTimeout) {
             invoke(pane, view)
-            pane.complete(player)
+            pane.complete(player, view)
         }
 
         // Store stateful panes
-        property?.also {
-            val value by property
-            paneStates[value ?: return@also] = completedPane
+        if ((backing as? StatefulTransform<*, *>)?.supportsReusingStates != false) {
+            property?.also {
+                val value by property
+                paneStates[value ?: return@also] = completedPane
+            }
         }
-
         return completedPane
     }
 }

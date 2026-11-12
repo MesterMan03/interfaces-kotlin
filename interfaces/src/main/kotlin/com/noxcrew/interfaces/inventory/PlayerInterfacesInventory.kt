@@ -1,12 +1,12 @@
 package com.noxcrew.interfaces.inventory
 
 import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper
-import com.noxcrew.interfaces.pane.PlayerPane.Companion.BOOTS_SLOT
-import com.noxcrew.interfaces.pane.PlayerPane.Companion.CHEST_SLOT
-import com.noxcrew.interfaces.pane.PlayerPane.Companion.EXTRA_ROW
-import com.noxcrew.interfaces.pane.PlayerPane.Companion.HELMET_SLOT
-import com.noxcrew.interfaces.pane.PlayerPane.Companion.LEGGING_SLOT
-import com.noxcrew.interfaces.pane.PlayerPane.Companion.OFFHAND_ROW
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.BOOTS_SLOT
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.CHEST_SLOT
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.EXTRA_ROW
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.HELMET_SLOT
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.LEGGING_SLOT
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.OFFHAND_ROW
 import org.bukkit.entity.Player
 import org.bukkit.inventory.ItemStack
 import org.bukkit.inventory.PlayerInventory
@@ -53,10 +53,10 @@ public class PlayerInterfacesInventory(
         if (row == EXTRA_ROW) {
             when (column) {
                 // Armor slots.
-                HELMET_SLOT.y -> playerInventory.helmet = item
-                CHEST_SLOT.y -> playerInventory.chestplate = item
-                LEGGING_SLOT.y -> playerInventory.leggings = item
-                BOOTS_SLOT.y -> playerInventory.boots = item
+                HELMET_SLOT.y -> playerInventory.setHelmet(item)
+                CHEST_SLOT.y -> playerInventory.setChestplate(item)
+                LEGGING_SLOT.y -> playerInventory.setLeggings(item)
+                BOOTS_SLOT.y -> playerInventory.setBoots(item)
                 // Crafting grid slots.
                 else -> player.openInventory.topInventory.setItem(column, item)
             }

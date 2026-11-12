@@ -1,6 +1,12 @@
 package com.noxcrew.interfaces.view
 
 import com.noxcrew.interfaces.InterfacesListeners
+import com.noxcrew.interfaces.element.CompletedElement
+import com.noxcrew.interfaces.grid.GridPoint
+import com.noxcrew.interfaces.grid.mapping.GridMapper
+import com.noxcrew.interfaces.inventory.InterfacesInventory
+import com.noxcrew.interfaces.pane.CompletedPane
+import com.noxcrew.interfaces.utilities.TitleState
 import kotlinx.coroutines.CoroutineScope
 import net.kyori.adventure.text.Component
 import org.bukkit.entity.Player
@@ -33,6 +39,19 @@ public interface InterfaceView {
      */
     public val isTreeOpened: Boolean
 
+    /** The [GridMapper] to convert from and to [GridPoint]. */
+    public val mapper: GridMapper
+
+    /** The final pane of the view, if created. */
+    public val completedPane: CompletedPane?
+
+    /** The inventory of this view. */
+    public val inventory: InterfacesInventory?
+
+    /** The title of this inventory. */
+    public val titleState: TitleState?
+        get() = null
+
     /** Opens up this view. */
     public suspend fun open(reload: Boolean = true)
 
@@ -51,7 +70,7 @@ public interface InterfaceView {
      */
     public suspend fun reopen(
         newParent: InterfaceView? =
-            InterfacesListeners.INSTANCE.convertHolderToInterfaceView(player.openInventory.topInventory.getHolder(false)),
+            InterfacesListeners.INSTANCE.determineInventoryHolder(player.openInventory.topInventory),
         reload: Boolean = true,
     ): Boolean
 
@@ -79,8 +98,13 @@ public interface InterfaceView {
     /** Re-opens the [parent] view, or closes this menu if it has no parent. */
     public suspend fun back()
 
+    /** Returns the current title of this view. */
+    public fun title(): Component? = titleState?.current
+
     /** Sets the title fo this view to [value]. */
-    public fun title(value: Component)
+    public fun title(value: Component) {
+        titleState?.current = value
+    }
 
     /** Called whenever a view is opened. */
     public fun onOpen()
@@ -89,7 +113,7 @@ public interface InterfaceView {
     public fun redrawComplete()
 
     /** Ensures the decoration task is running. */
-    public fun ensureDecorating()
+    public fun ensureDecorating(element: CompletedElement? = null)
 
     /**
      * Sends a chat query for this player. This view will temporarily close, allowing the player

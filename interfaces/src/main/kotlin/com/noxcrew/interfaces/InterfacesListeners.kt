@@ -11,10 +11,13 @@ import com.noxcrew.interfaces.click.CompletableClickHandler
 import com.noxcrew.interfaces.exception.InterfacesExceptionContext
 import com.noxcrew.interfaces.exception.InterfacesOperation
 import com.noxcrew.interfaces.grid.GridPoint
-import com.noxcrew.interfaces.pane.PlayerPane
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper
+import com.noxcrew.interfaces.interfaces.PlayerInventoryType
+import com.noxcrew.interfaces.inventory.clearInventory
+import com.noxcrew.interfaces.menu.MenuOpenOperation
 import com.noxcrew.interfaces.utilities.InterfacesCoroutineDetails
 import com.noxcrew.interfaces.view.AbstractInterfaceView
-import com.noxcrew.interfaces.view.ChestInterfaceView
+import com.noxcrew.interfaces.view.ContainerInterfaceView
 import com.noxcrew.interfaces.view.InterfaceView
 import com.noxcrew.interfaces.view.PlayerInterfaceView
 import io.papermc.paper.event.player.AsyncChatEvent
@@ -24,6 +27,7 @@ import org.bukkit.Bukkit
 import org.bukkit.Material
 import org.bukkit.NamespacedKey
 import org.bukkit.block.Block
+import org.bukkit.craftbukkit.entity.CraftPlayer
 import org.bukkit.entity.HumanEntity
 import org.bukkit.entity.Player
 import org.bukkit.event.Event
@@ -45,12 +49,14 @@ import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.player.PlayerRespawnEvent
 import org.bukkit.event.player.PlayerSwapHandItemsEvent
 import org.bukkit.inventory.EquipmentSlot
+import org.bukkit.inventory.Inventory
 import org.bukkit.inventory.InventoryHolder
 import org.bukkit.inventory.ItemStack
 import org.bukkit.plugin.Plugin
 import org.slf4j.LoggerFactory
 import java.util.EnumSet
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
@@ -71,6 +77,12 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
             INSTANCE = InterfacesListeners(plugin)
             Bukkit.getPluginManager().registerEvents(INSTANCE, plugin)
         }
+
+        /** All inventory types considered the player inventory. */
+        public val PLAYER_INVENTORY_TYPES: Set<InventoryType> = setOf(
+            InventoryType.PLAYER,
+            InventoryType.CRAFTING,
+        )
 
         /** All valid closing reasons that should re-open the previously opened player inventory. */
         public val REOPEN_REASONS: Set<Reason> = EnumSet.of(
@@ -168,6 +180,20 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     /** A map of interfaces being rendered for each player. */
     private val renderingPlayerInterfaceViews = ConcurrentHashMap<UUID, InterfaceView>()
 
+    /** A map of all ongoing chat queries. */
+    private val lastOpenedMenu = ConcurrentHashMap<UUID, MenuOpenOperation>()
+
+    /** Returns whether [playerId] is in a chat query. */
+    public fun hasChatQuery(playerId: UUID): Boolean = queries.containsKey(playerId)
+
+    /** Stores the last menu opened by [player]. */
+    public fun submitMenuOpen(player: Player, operation: MenuOpenOperation) {
+        lastOpenedMenu[player.uniqueId] = operation
+    }
+
+    /** Returns the menu last opened by [player]. */
+    public fun getLastOpenedMenu(player: Player): MenuOpenOperation? = lastOpenedMenu[player.uniqueId]
+
     /** Runs [function] without reopening a new menu. */
     public fun withoutReopen(function: () -> Unit) {
         val oldValue = dontReopen
@@ -208,6 +234,12 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         if (result.shouldStillBeOpened) return result
         openPlayerInterfaceViews -= playerId
         return null
+    }
+
+    /** Returns whether we can re-render [view] or not. */
+    public fun canReRender(playerId: UUID, view: InterfaceView): Boolean {
+        val current = renderingPlayerInterfaceViews[playerId]
+        return current == null || current == view
     }
 
     /** Sets the view currently being rendered for [playerId] to [view], returns `false` if this view is already being rendered. */
@@ -268,8 +300,9 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     public fun saveInventoryContentsIfOpened(player: HumanEntity) {
         // Saves any persistent items stored in the main inventory whenever we are currently
         // showing a combined or player inventory before we draw the new one over-top
+        if (dontReopen) return
         val currentlyShown = openInventory[player]
-        if (currentlyShown != null && currentlyShown !is ChestInterfaceView) {
+        if (currentlyShown != null && currentlyShown is PlayerInterfaceView) {
             if (currentlyShown.builder.persistAddedItems) {
                 currentlyShown.savePersistentItems(player.inventory)
             }
@@ -281,8 +314,13 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         // Save previous inventory contents before we open the new one
         saveInventoryContentsIfOpened(event.player)
 
-        val holder = event.inventory.getHolder(false)
-        val view = convertHolderToInterfaceView(holder)
+        val view = determineInventoryHolder(event.inventory)
+
+        // Don't open if the view is not meant to be open!
+        if (view?.shouldStillBeOpened == false) {
+            event.isCancelled = true
+            return
+        }
 
         // Close the previous view first with open new as the reason, unless we
         // are currently opening this view!
@@ -330,6 +368,19 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         // Save previous inventory contents before we open the new one (only if we have one open!)
         if (openInventory.containsKey(event.player)) {
             saveInventoryContentsIfOpened(event.player)
+
+            // If the opened menu was a combined inventory we have to re-sync the inventory
+            // before opening the next menu!
+            if ((openInventory[event.player] as? ContainerInterfaceView)?.backing?.builder?.playerInventoryType ==
+                PlayerInventoryType.FAKE
+            ) {
+                // If we are currently rendering another fake inventory, skip this!
+                if ((renderingPlayerInterfaceViews[event.player.uniqueId] as? ContainerInterfaceView<*, *>)
+                        ?.backing?.builder?.playerInventoryType != PlayerInventoryType.FAKE
+                ) {
+                    (event.player as CraftPlayer).handle.inventoryMenu.sendAllDataToRemote()
+                }
+            }
         }
 
         // When opening a new inventory we ignore the close event as it wrongly
@@ -354,10 +405,8 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public fun onClick(event: InventoryClickEvent) {
         // Try to get the view of the top inventory first but fall back to the clicked inventory in specific
-        val mainView = convertHolderToInterfaceView(event.inventory.getHolder(false))
-        val view = mainView ?: convertHolderToInterfaceView(
-            (event.clickedInventory ?: event.inventory).getHolder(false),
-        ) ?: return
+        val mainView = determineInventoryHolder(event.inventory)
+        val view = mainView ?: determineInventoryHolder(event.clickedInventory ?: event.inventory) ?: return
 
         // If we are using a fallback player view we need to adjust the raw slot to include the 9 regular player inventory top slots
         val clickedPoint =
@@ -365,7 +414,17 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         val isPlayerInventory = (event.clickedInventory ?: event.inventory).getHolder(false) is Player
 
         // Run base click handling
-        if (handleClick(view, clickedPoint, event.click, event.hotbarButton, isPlayerInventory, false)) {
+        if (handleClick(
+                view, clickedPoint, event.click, isPlayerInventory, false,
+                if (event.click ==
+                    ClickType.NUMBER_KEY
+                ) {
+                    event.hotbarButton
+                } else {
+                    null
+                },
+            )
+        ) {
             event.isCancelled = true
         }
 
@@ -515,8 +574,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
 
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public fun onDrag(event: InventoryDragEvent) {
-        val holder = event.inventory.getHolder(false)
-        val view = convertHolderToInterfaceView(holder) ?: return
+        val view = determineInventoryHolder(event.inventory) ?: return
         for (slot in event.rawSlots) {
             val clickedPoint = GridPoint.fromBukkitChestSlot(slot) ?: continue
             if (!canFreelyMove(view, clickedPoint, slot >= event.inventory.size)) {
@@ -535,6 +593,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         renderingPlayerInterfaceViews.remove(playerId)?.close(SCOPE, Reason.DISCONNECT)
         backgroundPlayerInterfaceViews.remove(playerId)?.close(SCOPE, Reason.DISCONNECT)
         openPlayerInterfaceViews.remove(playerId)?.close(SCOPE, Reason.DISCONNECT)
+        lastOpenedMenu.remove(playerId)
     }
 
     /** Returns whether [block] will trigger some interaction if clicked with [item]. */
@@ -559,21 +618,21 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
             if (event.hand == EquipmentSlot.HAND) {
                 GridPoint.at(3, player.inventory.heldItemSlot)
             } else {
-                PlayerPane.OFF_HAND_SLOT
+                PlayerInventoryGridMapper.OFF_HAND_SLOT
             },
         )
         val click = convertAction(event.action, player.isSneaking)
 
         // Check if the action is prevented if this slot is not freely
         // movable
-        if (!canFreelyMove(view, clickedPoint, true) &&
-            event.action in view.builder.preventedInteractions
+        if (event.action in view.builder.preventedInteractions &&
+            !canFreelyMove(view, clickedPoint, true)
         ) {
             event.isCancelled = true
             return
         }
 
-        if (handleClick(view, clickedPoint, click, -1, isPlayerInventory = true, interact = true)) {
+        if (handleClick(view, clickedPoint, click, isPlayerInventory = true, interact = true)) {
             // Support modern behavior where we don't interfere with block interactions
             if (view.builder.onlyCancelItemInteraction) {
                 event.setUseItemInHand(Event.Result.DENY)
@@ -615,7 +674,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public fun onDeath(event: PlayerDeathEvent) {
         // Determine the holder of the top inventory being shown (can be open player inventory)
-        val view = convertHolderToInterfaceView(event.player.openInventory.topInventory.getHolder(false)) ?: return
+        val view = determineInventoryHolder(event.player.openInventory.topInventory) ?: return
 
         // Ignore inventories that do not use the player inventory!
         if (!view.backing.includesPlayerInventory) return
@@ -674,11 +733,18 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         event.isCancelled = true
     }
 
+    /** Returns the interface associated with [inventory]. */
+    public fun determineInventoryHolder(inventory: Inventory): AbstractInterfaceView<*, *, *>? =
+        convertHolderToInterfaceView(inventory.getHolder(false), inventory.type in PLAYER_INVENTORY_TYPES)
+
     /**
      * Converts an inventory holder to an [AbstractInterfaceView] if possible. If the holder is a player
      * their currently open player interface is returned.
      */
-    public fun convertHolderToInterfaceView(holder: InventoryHolder?): AbstractInterfaceView<*, *, *>? {
+    private fun convertHolderToInterfaceView(
+        holder: InventoryHolder?,
+        acceptPlayerInventory: Boolean = true,
+    ): AbstractInterfaceView<*, *, *>? {
         if (holder == null) return null
 
         // If it's an abstract view use that one
@@ -686,45 +752,45 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
 
         // If it's the player's own inventory use the held one, it might be the background one if
         // this is the bottom of a combined inventory
-        if (holder is HumanEntity) return getOpenPlayerInterface(holder.uniqueId) ?: getBackgroundPlayerInterface(holder.uniqueId)
+        if (holder is HumanEntity && acceptPlayerInventory) {
+            return getOpenPlayerInterface(holder.uniqueId) ?: getBackgroundPlayerInterface(
+                holder.uniqueId,
+            )
+        }
 
         return null
     }
 
     /** Returns whether [clickedPoint] in [view] can be freely moved. */
     private fun canFreelyMove(view: AbstractInterfaceView<*, *, *>, clickedPoint: GridPoint, isPlayerInventory: Boolean): Boolean {
-        // If we don't allow clicking empty slots we never allow freely moving
-        if (view.builder.preventClickingEmptySlots &&
-            !(view.builder.allowClickingOwnInventoryIfClickingEmptySlotsIsPrevented && isPlayerInventory)
-        ) {
-            return false
-        }
-
         // If this inventory has no player inventory then the player inventory is always allowed to be edited
         if (!view.backing.includesPlayerInventory && isPlayerInventory) {
             return true
         }
 
         // If there is no item here we allow editing
-        return view.completedPane?.getRaw(clickedPoint)?.itemStack == null
+        val raw = view.completedPane?.getRaw(clickedPoint) ?: return !view.builder.preventClickingEmptySlots
+        return raw.isSlotModifiable
     }
 
-    /** Handles a [view] being clicked at [clickedPoint] through some [event]. */
+    /** Handles a [view] being clicked at [clickedPoint]. */
     private fun handleClick(
         view: AbstractInterfaceView<*, *, *>,
         clickedPoint: GridPoint,
         click: ClickType,
-        slot: Int,
         isPlayerInventory: Boolean,
         interact: Boolean,
+        numberKey: Int? = null,
     ): Boolean {
         // Determine the type of click, if nothing was clicked we allow it
         val raw = view.completedPane?.getRaw(clickedPoint)
 
         // Determine if there is a click handler on this item
         val handler = raw?.clickHandler
-            ?: return view.builder.preventClickingEmptySlots &&
-                !(view.builder.allowClickingOwnInventoryIfClickingEmptySlotsIsPrevented && isPlayerInventory)
+        if (handler == null) {
+            // If there's no click handler, use canFreelyMove logic!
+            return !canFreelyMove(view, clickedPoint, isPlayerInventory)
+        }
 
         // Prevent clicking on a decoration that is still loading!
         if (raw.pendingLazy?.requireDecorationToClick == true) {
@@ -742,7 +808,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         view.isProcessingClick = true
 
         // Forward this click to all pre-processors
-        val clickContext = ClickContext(view.player, view, click, slot, interact)
+        val clickContext = ClickContext(view.player, view, click, clickedPoint, interact, numberKey)
 
         // Run the click handler and deal with its result
         val completedClickHandler = view.executeSync(
@@ -761,7 +827,11 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
                 .run { CompletableClickHandler().apply { handle(clickContext) } }
                 .onComplete { ex ->
                     if (ex != null) {
-                        logger.error("Failed to run click handler for ${view.player.name}", ex)
+                        if (ex !is CancellationException) {
+                            logger.warn("Timed out while running click handler on ${raw.itemStack} for ${view.player.name}")
+                        } else {
+                            logger.error("Failed to run click handler on ${raw.itemStack} for ${view.player.name}", ex)
+                        }
                     }
                     view.isProcessingClick = false
                 }
@@ -777,12 +847,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
                 120,
             )
         }
-
-        // Update the cancellation state of the event
-        if (completedClickHandler.cancelled) {
-            return true
-        }
-        return false
+        return !raw.isSlotModifiable
     }
 
     /** Converts a bukkit [action] to a [ClickType]. */
@@ -834,7 +899,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
             }
 
             // Clear the inventory
-            view.player.inventory.clear()
+            view.player.clearInventory()
         }
 
         // Set up the query

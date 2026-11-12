@@ -1,0 +1,46 @@
+package com.noxcrew.interfaces.grid.mapping
+
+import com.noxcrew.interfaces.grid.mapping.GridMapper.PlayerInventory.Companion.PLAYER_INV_PLUS_HOTBAR_ROWS
+import com.noxcrew.interfaces.grid.mapping.GridMapper.PlayerInventory.Companion.PLAYER_INV_ROWS
+import com.noxcrew.interfaces.utilities.gridPointToBukkitIndex
+import com.noxcrew.interfaces.utilities.iterateForEachInGrid
+
+/** Handles [com.noxcrew.interfaces.grid.GridPoint] mapping for containers. */
+public open class ContainerGridMapper(private val rows: Int, private val includesPlayerInventory: Boolean) :
+    AbstractGridMapper(),
+    GridMapper.TopInventory,
+    GridMapper.PlayerInventory {
+
+    public companion object {
+        /** The amount of columns a chest inventory has. */
+        public const val COLUMNS_IN_CHEST: Int = 9
+    }
+
+    /** Rows of container times [COLUMNS_IN_CHEST] minus [COLUMNS_IN_CHEST] because 0-8 is in the hot bar. */
+    private val containerSize = rows * COLUMNS_IN_CHEST - COLUMNS_IN_CHEST
+
+    override fun forEachInGrid(function: (row: Int, column: Int) -> Unit) {
+        if (includesPlayerInventory) {
+            iterateForEachInGrid(rows + PLAYER_INV_PLUS_HOTBAR_ROWS, COLUMNS_IN_CHEST, function)
+            function(rows + 4, 0)
+        } else {
+            iterateForEachInGrid(rows, COLUMNS_IN_CHEST, function)
+        }
+    }
+
+    override fun toTopInventorySlot(row: Int, column: Int): Int {
+        return gridPointToBukkitIndex(row, column)
+    }
+
+    override fun toPlayerInventorySlot(row: Int, column: Int): Int {
+        // If it's not the last row we remove chest size.
+        val hotbarRow = rows + PLAYER_INV_ROWS
+
+        if (row < hotbarRow) return gridPointToBukkitIndex(row, column) - containerSize
+
+        // On the last row we use row 0 to map it from 0-8 for the hot bar.
+        return gridPointToBukkitIndex(0, column)
+    }
+
+    override fun isPlayerInventory(row: Int, column: Int): Boolean = row >= rows
+}

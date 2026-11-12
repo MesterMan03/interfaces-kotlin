@@ -15,7 +15,7 @@ public interface BaseInventoryMenu {
     public suspend fun openOrThrow(
         player: Player,
         parent: InterfaceView? =
-            InterfacesListeners.INSTANCE.convertHolderToInterfaceView(player.openInventory.topInventory.getHolder(false)),
+            InterfacesListeners.INSTANCE.determineInventoryHolder(player.openInventory.topInventory),
         reload: Boolean = true,
     ): InterfaceView = open(player, parent, reload)
         ?: throw RuntimeException(
@@ -31,11 +31,17 @@ public interface BaseInventoryMenu {
             """.trimIndent(),
         )
 
+    /**
+     * Re-opens this menu for the given [player]. It's recommended to
+     * create a new instance of this menu and open it instead if relevant.
+     */
+    public suspend fun reopen(player: Player, parent: InterfaceView?): InterfaceView? = open(player, parent, reload = true)
+
     /** Opens this menu for the given [player]. */
     public suspend fun open(
         player: Player,
         parent: InterfaceView? =
-            InterfacesListeners.INSTANCE.convertHolderToInterfaceView(player.openInventory.topInventory.getHolder(false)),
+            InterfacesListeners.INSTANCE.determineInventoryHolder(player.openInventory.topInventory),
         reload: Boolean = true,
     ): InterfaceView?
 

@@ -24,6 +24,10 @@ public abstract class PaginationTransformation<P : Pane, E>(
         override suspend fun drawElement(index: Int, element: Element): Element = element
     }
 
+    /** Whether this transform has initialized the page count. */
+    protected var initialized: Boolean = false
+        private set
+
     /** A list of positions for this transformation. */
     protected val positions: List<GridPoint> = positionGenerator.generate()
 
@@ -33,6 +37,7 @@ public abstract class PaginationTransformation<P : Pane, E>(
     /** The values this transformation is displaying. */
     protected var values: List<E> by Delegates.observable(default.toList()) { _, _, _ ->
         boundPage.max = maxPages()
+        boundPage.value = page
         refreshTrigger.trigger()
     }
 
@@ -40,11 +45,17 @@ public abstract class PaginationTransformation<P : Pane, E>(
     protected open val entryCount: Int
         get() = values.lastIndex
 
-    init {
-        boundPage.max = maxPages()
+    /** Initializes this transform. */
+    protected fun initialize() {
+        if (!initialized) {
+            boundPage.max = maxPages()
+            boundPage.value = page
+            initialized = true
+        }
     }
 
     override suspend fun invoke(pane: P, view: InterfaceView) {
+        initialize()
         val positions = positionGenerator.generate()
         val slots = positions.size
 
@@ -74,7 +85,5 @@ public abstract class PaginationTransformation<P : Pane, E>(
     protected abstract suspend fun drawElement(index: Int, element: E): Element
 
     /** Returns the maximum number of pages required to accommodate all the entries in [values]. */
-    private fun maxPages(): Int {
-        return entryCount.floorDiv(positionGenerator.generate().size).coerceAtLeast(0)
-    }
+    public fun maxPages(): Int = entryCount.floorDiv(positionGenerator.generate().size).coerceAtLeast(0)
 }

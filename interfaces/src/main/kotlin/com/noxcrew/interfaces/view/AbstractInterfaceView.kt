@@ -11,12 +11,16 @@ import com.noxcrew.interfaces.exception.InterfacesExceptionHandler
 import com.noxcrew.interfaces.exception.InterfacesExceptionResolution
 import com.noxcrew.interfaces.exception.InterfacesOperation
 import com.noxcrew.interfaces.grid.GridPoint
+import com.noxcrew.interfaces.grid.mapping.GridMapper
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.EXTRA_ROW
+import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper.OFF_HAND_SLOT
+import com.noxcrew.interfaces.interfaces.ContainerInterfaceBuilder
 import com.noxcrew.interfaces.interfaces.Interface
 import com.noxcrew.interfaces.interfaces.InterfaceBuilder
+import com.noxcrew.interfaces.interfaces.PlayerInventoryType
 import com.noxcrew.interfaces.inventory.InterfacesInventory
 import com.noxcrew.interfaces.pane.CompletedPane
 import com.noxcrew.interfaces.pane.Pane
-import com.noxcrew.interfaces.pane.PlayerPane
 import com.noxcrew.interfaces.properties.LazyProperty
 import com.noxcrew.interfaces.properties.StateProperty
 import com.noxcrew.interfaces.properties.Trigger
@@ -26,6 +30,7 @@ import com.noxcrew.interfaces.transform.RefreshMode
 import com.noxcrew.interfaces.utilities.CollapsablePaneMap
 import com.noxcrew.interfaces.utilities.InterfacesCoroutineDetails
 import com.noxcrew.interfaces.utilities.InterfacesProfiler
+import com.noxcrew.interfaces.utilities.InventorySegment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -40,7 +45,6 @@ import org.bukkit.entity.Player
 import org.bukkit.event.inventory.InventoryCloseEvent
 import org.bukkit.inventory.Inventory
 import org.bukkit.inventory.ItemStack
-import org.slf4j.LoggerFactory
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -67,17 +71,8 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
     public val backing: T,
     birthParent: InterfaceView?,
 ) : InterfaceView, InterfacesExceptionHandler by backing.builder.exceptionHandler {
-
-    public companion object {
-        /** The amount of columns a chest inventory has. */
-        public const val COLUMNS_IN_CHEST: Int = 9
-    }
-
-    private val logger = LoggerFactory.getLogger(AbstractInterfaceView::class.java)
     private val paneMutex = Mutex()
     private val debouncedRender = AtomicBoolean(false)
-
-    private val mapper = backing.mapper
 
     private val children = WeakHashMap<AbstractInterfaceView<*, *, *>, Unit>()
 
@@ -90,9 +85,6 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
 
     /** Whether the view is being painted for the first time. */
     protected var firstPaint: Boolean = true
-
-    /** Whether the title of the inventory should be re-painted. */
-    protected var refreshTitle: Boolean = true
 
     /** Whether all properties should be fully reloaded. */
     protected var fullyReload: Boolean = false
@@ -154,8 +146,12 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
     override val isTreeOpened: Boolean
         get() = shouldStillBeOpened || children.keys.any { it.isTreeOpened }
 
-    /** The pane of this view. */
-    public val completedPane: CompletedPane?
+    override val mapper: GridMapper = backing.mapper
+
+    override val inventory: InterfacesInventory?
+        get() = if (::currentInventory.isInitialized) currentInventory else null
+
+    override val completedPane: CompletedPane?
         get() = if (::pane.isInitialized) pane else null
 
     init {
@@ -222,7 +218,6 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
 
             // Run a generic close handler if it's still opened and if the inventory was actually opened at any point
             if (shouldBeOpened.compareAndSet(true, false) &&
-                (!changingView || builder.callCloseHandlerOnViewSwitch) &&
                 ::currentInventory.isInitialized
             ) {
                 builder.closeHandlers[reason]?.forEach {
@@ -347,7 +342,7 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
 
         // If we want to redraw the title we use a new inventory always
         if (backing.builder.redrawTitleOnReopen) {
-            refreshTitle = true
+            titleState?.markDirty()
         }
 
         // Start by triggering all valid properties
@@ -371,7 +366,12 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
 
     override suspend fun back() {
         val parent = parent()
-        if (parent == null) {
+
+        // If the state is not valid, don't do anything!
+        if (!coroutineContext.isActive || Bukkit.isStopping() || !player.isConnected) return
+
+        // If the parent has been requested to close, don't open any menu!
+        if (parent == null || !parent.isTreeOpened) {
             close()
         } else {
             parent.open(reload = false)
@@ -472,7 +472,7 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
             ) {
                 withTimeout(builder.defaultTimeout) {
                     // Collect the panes together and add air where necessary
-                    pane = panes.collapse(backing.mapper, builder.allowClickingEmptySlots)
+                    pane = panes.collapse(backing.mapper, builder.triggerClickEventsForEmptySlots, !builder.preventClickingEmptySlots)
 
                     // Render the completed panes
                     renderToInventory()
@@ -596,13 +596,17 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
         }
     }
 
-    override fun ensureDecorating() {
-        // Updates the current list of lazy elements to mirror all currently lazy elements
-        val lazyElements = ConcurrentLinkedQueue<CompletedElement>()
-        completedPane?.forEach { _, _, element ->
-            element.pendingLazy?.also { lazyElements += element }
+    override fun ensureDecorating(element: CompletedElement?) {
+        if (element != null) {
+            this.lazyElements += element
+        } else {
+            // Updates the current list of lazy elements to mirror all currently lazy elements
+            val lazyElements = ConcurrentLinkedQueue<CompletedElement>()
+            completedPane?.forEach { _, _, element ->
+                element.pendingLazy?.also { lazyElements += element }
+            }
+            this.lazyElements = lazyElements
         }
-        this.lazyElements = lazyElements
 
         // Start the task!
         scheduleSingletonTask(decorationMutex, decoratingJob, ::lazilyDecorateItems)
@@ -691,9 +695,14 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
         }
     }
 
-    protected open fun drawPaneToInventory(drawNormalInventory: Boolean, drawPlayerInventory: Boolean) {
+    /** Draws this inventory to the given [segment]. */
+    protected open fun drawPaneToInventory(segment: InventorySegment) {
         // Stop drawing if the player disconnected
         if (!player.isConnected) return
+
+        // Start by running pre-processors so they can handle change
+        // before we make any edits to the inventory!
+        builder.getPreprocessors(segment).forEach { handler -> handler(currentInventory, this, player) }
 
         // Determine all slots we need to clear if unused
         val leftovers = mutableListOf<Pair<Int, Int>>()
@@ -709,14 +718,17 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
 
             // We defer drawing of any elements in the player inventory itself
             // for later unless the inventory is already open.
-            val isPlayerInventory = mapper.isPlayerInventory(row, column)
-            if ((!drawNormalInventory && !isPlayerInventory) || (!drawPlayerInventory && isPlayerInventory)) return@inner
+            val elementSegment = mapper.getSegment(row, column)
+            if (elementSegment != segment) return@inner
 
-            currentInventory.set(
-                row,
-                column,
-                element.itemStack?.takeUnless { it.isEmpty }?.also { builder.itemPostProcessor?.invoke(it) },
-            )
+            val newItem = element.itemStack?.also { builder.itemPostProcessor?.invoke(it) }
+            if (!builder.dontOverrideItems || newItem != null) {
+                currentInventory.set(
+                    row,
+                    column,
+                    newItem,
+                )
+            }
             leftovers -= row to column
             madeChanges = true
         }
@@ -735,8 +747,8 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
         for ((point, item) in addedItems) {
             val row = point.x
             val column = point.y
-            val isPlayerInventory = mapper.isPlayerInventory(row, column)
-            if ((!drawNormalInventory && !isPlayerInventory) || (!drawPlayerInventory && isPlayerInventory)) continue
+            val elementSegment = mapper.getSegment(row, column)
+            if (elementSegment != segment) continue
 
             currentInventory.set(
                 row,
@@ -749,14 +761,22 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
 
         // Empty any slots that are not otherwise edited
         for ((row, column) in leftovers) {
-            val isPlayerInventory = mapper.isPlayerInventory(row, column)
-            if ((!drawNormalInventory && !isPlayerInventory) || (!drawPlayerInventory && isPlayerInventory)) continue
+            val elementSegment = mapper.getSegment(row, column)
+            if (elementSegment != segment) continue
             currentInventory.set(row, column, null)
             madeChanges = true
         }
 
         if (madeChanges) {
-            Bukkit.getPluginManager().callEvent(DrawPaneEvent(player, this, drawNormalInventory, drawPlayerInventory))
+            builder.getPostprocessors(segment).forEach { handler -> handler(currentInventory, this, player) }
+            Bukkit.getPluginManager().callEvent(
+                DrawPaneEvent(
+                    player,
+                    this,
+                    segment,
+                    (backing.builder as? ContainerInterfaceBuilder<*, *>)?.playerInventoryType ?: PlayerInventoryType.DEFAULT,
+                ),
+            )
         }
     }
 
@@ -764,6 +784,9 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
     public fun savePersistentItems(inventory: Inventory) {
         // We can only save items added to the player interface!
         if (this !is PlayerInterfaceView) return
+
+        // Don't save if closed!
+        if (!shouldStillBeOpened) return
 
         addedItems.clear()
         val contents = inventory.contents
@@ -774,9 +797,9 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
 
             // Find the slot that this item is in
             val point = if (index == 40) {
-                PlayerPane.OFF_HAND_SLOT
+                OFF_HAND_SLOT
             } else if (index >= 36) {
-                GridPoint(PlayerPane.EXTRA_ROW, 5 + (39 - index))
+                GridPoint(EXTRA_ROW, 5 + (39 - index))
             } else if (index < 9) {
                 GridPoint(3, index)
             } else {
@@ -795,28 +818,33 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
         // Whenever we open the inventory we draw all elements in the player inventory
         // itself. We do this in this hook because it runs after InventoryCloseEvent so
         // it properly happens as the last possible action.
-        drawPaneToInventory(drawNormalInventory = false, drawPlayerInventory = true)
+        drawPaneToInventory(InventorySegment.PLAYER)
     }
-
-    /** Hook for updating the title of the inventory. */
-    protected open suspend fun updateTitle() {
-    }
-
-    protected open fun requiresNewInventory(): Boolean = firstPaint
 
     protected open suspend fun renderToInventory() {
+        // Try to update the title if it has a supplier
+        if (titleState?.supplier != null && titleState?.refresh == true) {
+            titleState?.current = titleState?.supplier?.invoke(player) ?: titleState?.current
+            titleState?.refresh = false
+        }
+
         // If the menu has since been requested to close we ignore all this
         if (!shouldBeOpened.get()) return
 
-        // Try to update the title
-        if (firstPaint || refreshTitle) {
-            updateTitle()
-        }
-
         // If a new inventory is required we create one
         // and mark that the current one is not to be used!
-        val createdInventory = if (requiresNewInventory()) {
+        val createdInventory = if (firstPaint ||
+            (
+                titleState?.dirty == true &&
+                    // You can only re-render the title of an open view
+                    isOpen() &&
+                    // We can only re-render the title of the current render view so a title
+                    // render cannot override a new menu being rendered
+                    InterfacesListeners.INSTANCE.canReRender(player.uniqueId, this)
+                )
+        ) {
             currentInventory = createInventory()
+            titleState?.clean()
 
             // Whenever we create a new inventory we have to re-mark this interface
             // as the one being rendered!
@@ -854,7 +882,10 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
                 // updates on menus that have closed do not affect future menus that actually
                 // ended up being opened.
                 val isOpen = isOpen()
-                drawPaneToInventory(drawNormalInventory = true, drawPlayerInventory = isOpen)
+                drawPaneToInventory(InventorySegment.CONTAINER)
+                if (isOpen) {
+                    drawPaneToInventory(InventorySegment.PLAYER)
+                }
                 InterfacesProfiler.log(this, "finished rendering to inventory")
 
                 if (this is PlayerInterfaceView) {
@@ -864,7 +895,7 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
                         openInventory()
                     }
                 } else {
-                    if ((openIfClosed.get() && !isOpen) || createdInventory) {
+                    if ((openIfClosed.get() && !isOpen) || firstPaint || (createdInventory && isOpen)) {
                         if (player.isConnected) {
                             openInventory()
                         }
@@ -872,7 +903,6 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
                 }
                 openIfClosed.set(false)
                 firstPaint = false
-                refreshTitle = false
             }
         }
     }
