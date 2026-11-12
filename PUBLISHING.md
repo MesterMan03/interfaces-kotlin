@@ -37,6 +37,15 @@ These are repository secrets, so MESTER's existing secrets do not automatically 
 secret already shared with both repositories can be used instead. Do not place credentials in this repository.
 Use the existing Central account authorized for `info.mester` and its subnamespaces, and the same registered signing key.
 
+Before the first snapshot publication, open [Central Portal → Namespaces](https://central.sonatype.com/publishing/namespaces),
+find `info.mester`, and select **⋮ → Enable SNAPSHOTs → Confirm**. Check that the namespace shows **SNAPSHOTs enabled**.
+This is separate from setting up GitHub secrets or publishing a normal release such as MESTER 0.1.0.
+See [Sonatype's snapshot setup instructions](https://central.sonatype.org/publish/publish-portal-snapshots/).
+
+If signing succeeds but uploading to `central.sonatype.com/repository/maven-snapshots/` fails with HTTP 403, check that setting
+first. If snapshots are already enabled, verify that the user token belongs to an account authorized for this namespace and
+its subnamespaces. After correcting access, rerun the failed publishing job; no version bump is necessary for a snapshot.
+
 Push the feature branch and merge it into `main` after review. The **Build** workflow only builds/tests; it never publishes.
 The **Publish to Maven Central** workflow publishes when `interfaces_version` changes on `main`, or when run manually through
 **Actions → Publish to Maven Central → Run workflow**. A `paper_version`-only change does not publish automatically.
