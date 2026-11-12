@@ -5,4 +5,10 @@ dependencies {
     api(libs.kotlin.coroutines)
     api(libs.slf4j)
     api(libs.caffeine)
+
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }

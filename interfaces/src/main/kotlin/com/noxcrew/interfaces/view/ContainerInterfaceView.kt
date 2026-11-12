@@ -1,6 +1,8 @@
 package com.noxcrew.interfaces.view
 
 import com.noxcrew.interfaces.InterfacesListeners
+import com.noxcrew.interfaces.element.CompletedElement
+import com.noxcrew.interfaces.grid.GridPoint
 import com.noxcrew.interfaces.interfaces.ContainerInterface
 import com.noxcrew.interfaces.interfaces.PlayerInventoryType
 import com.noxcrew.interfaces.inventory.CachedInterfacesInventory
@@ -22,6 +24,7 @@ import org.bukkit.craftbukkit.event.CraftEventFactory
 import org.bukkit.entity.Player
 import org.bukkit.inventory.Inventory
 import org.bukkit.inventory.InventoryHolder
+import org.bukkit.inventory.ItemStack
 
 /** Implements a container view. */
 public class ContainerInterfaceView<I : ContainerInterface<I, P>, P : ContainerPane> internal constructor(
@@ -48,22 +51,67 @@ public class ContainerInterfaceView<I : ContainerInterface<I, P>, P : ContainerP
 
     override val titleState: TitleState = TitleState(initialSupplier = backing.titleSupplier)
 
-    override fun createInventory(): CachedInterfacesInventory = if (backing.builder.playerInventoryType == PlayerInventoryType.FAKE) {
-        FakedContainerInterfacesInventory(
-            holder = this,
-            player = player,
-            rows = backing.rows,
-            mapper = backing.mapper,
-        )
-    } else {
-        ContainerInterfacesInventory(
-            holder = this,
-            player = player,
-            title = titleState.current,
-            rows = backing.rows,
-            includesPlayerInventory = backing.includesPlayerInventory,
-            mapper = backing.mapper,
-        )
+    private val managedSlots = linkedSetOf<GridPoint>()
+
+    /** Whether [slot] in the top inventory belongs to item storage rather than the UI renderer. */
+    public fun isManagedSlot(slot: Int): Boolean = GridPoint.fromBukkitChestSlot(slot) in managedSlots
+
+    /** A detached snapshot of all managed slots, including empty slots. Safe to use when saving on close. */
+    public fun managedContents(): Map<GridPoint, ItemStack?> = managedSlots.associateWith {
+        inventory?.get(it.x, it.y)?.clone()
+    }
+
+    /** Clears and returns the managed items exactly once; subsequent calls return an empty map. Call on the server thread. */
+    public fun drainManagedItems(): Map<GridPoint, ItemStack> {
+        check(org.bukkit.Bukkit.isPrimaryThread()) { "Managed items must be drained on the server thread" }
+        val result = managedContents().mapNotNull { (point, stack) ->
+            stack?.takeUnless { it.isEmpty }?.let { point to it }
+        }.toMap()
+        for (point in result.keys) inventory?.set(point.x, point.y, null)
+        return result
+    }
+
+    /** Called before the old inventory is retired so a delayed coroutine cannot drain a subsequently reopened view. */
+    internal fun returnManagedItems() {
+        if (!backing.builder.manageItems || !backing.builder.returnManagedItemsOnClose) return
+        for (item in drainManagedItems().values) {
+            for (leftover in player.inventory.addItem(item).values) {
+                player.world.dropItemNaturally(player.location, leftover)
+            }
+        }
+    }
+
+    override fun drawManagedSlot(row: Int, column: Int, element: CompletedElement?): Boolean {
+        if (!backing.builder.manageItems || row !in 0 until backing.rows) return false
+        val point = GridPoint.at(row, column)
+        if (point in managedSlots) return true
+        if (element?.isSlotModifiable != true) return false
+        managedSlots += point
+        currentInventory.set(row, column, element.itemStack?.clone())
+        return true
+    }
+
+    override fun createInventory(): CachedInterfacesInventory {
+        val retained = managedContents()
+        val created = if (backing.builder.playerInventoryType == PlayerInventoryType.FAKE) {
+            FakedContainerInterfacesInventory(
+                holder = this,
+                player = player,
+                rows = backing.rows,
+                mapper = backing.mapper,
+            )
+        } else {
+            ContainerInterfacesInventory(
+                holder = this,
+                player = player,
+                title = titleState.current,
+                rows = backing.rows,
+                includesPlayerInventory = backing.includesPlayerInventory,
+                mapper = backing.mapper,
+            )
+        }
+        for ((point, item) in retained) created.set(point.x, point.y, item)
+        return created
     }
 
     override fun openInventory() {

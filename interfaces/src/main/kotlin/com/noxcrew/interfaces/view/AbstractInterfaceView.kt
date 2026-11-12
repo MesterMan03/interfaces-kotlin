@@ -721,6 +721,11 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
             val elementSegment = mapper.getSegment(row, column)
             if (elementSegment != segment) return@inner
 
+            if (drawManagedSlot(row, column, element)) {
+                leftovers -= row to column
+                return@inner
+            }
+
             val newItem = element.itemStack?.also { builder.itemPostProcessor?.invoke(it) }
             if (!builder.dontOverrideItems || newItem != null) {
                 currentInventory.set(
@@ -763,6 +768,7 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
         for ((row, column) in leftovers) {
             val elementSegment = mapper.getSegment(row, column)
             if (elementSegment != segment) continue
+            if (drawManagedSlot(row, column, null)) continue
             currentInventory.set(row, column, null)
             madeChanges = true
         }
@@ -779,6 +785,9 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
             )
         }
     }
+
+    /** Returns true when a slot is owned by item storage rather than the renderer. */
+    protected open fun drawManagedSlot(row: Int, column: Int, element: CompletedElement?): Boolean = false
 
     /** Saves any persistent items based on [inventory]. */
     public fun savePersistentItems(inventory: Inventory) {
@@ -843,9 +852,6 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
                     InterfacesListeners.INSTANCE.canReRender(player.uniqueId, this)
                 )
         ) {
-            currentInventory = createInventory()
-            titleState?.clean()
-
             // Whenever we create a new inventory we have to re-mark this interface
             // as the one being rendered!
             InterfacesListeners.INSTANCE.setRenderView(player.uniqueId, this)
@@ -871,6 +877,13 @@ public abstract class AbstractInterfaceView<I : InterfacesInventory, T : Interfa
             ) {
                 // If the menu has since been requested to close we ignore all this
                 if (!shouldBeOpened.get()) return@executeSync
+
+                // Capture stored items and replace the inventory in the same server-thread operation as opening it.
+                // Otherwise a click between an asynchronous snapshot and opening the replacement can duplicate or lose items.
+                if (createdInventory) {
+                    currentInventory = createInventory()
+                    titleState?.clean()
+                }
 
                 // Save persistent items before we render
                 if (builder.inheritExistingItems) {

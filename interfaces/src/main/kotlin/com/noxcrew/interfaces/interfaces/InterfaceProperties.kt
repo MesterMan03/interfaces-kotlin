@@ -2,6 +2,7 @@ package com.noxcrew.interfaces.interfaces
 
 import com.google.common.collect.HashMultimap
 import com.google.common.collect.Multimap
+import com.noxcrew.interfaces.InterfacesListeners
 import com.noxcrew.interfaces.click.ClickHandler
 import com.noxcrew.interfaces.exception.InterfacesExceptionHandler
 import com.noxcrew.interfaces.exception.StandardInterfacesExceptionHandler
@@ -9,6 +10,7 @@ import com.noxcrew.interfaces.pane.Pane
 import com.noxcrew.interfaces.transform.BlockingMode
 import com.noxcrew.interfaces.transform.RefreshMode
 import com.noxcrew.interfaces.utilities.InventorySegment
+import com.noxcrew.interfaces.view.ContainerInterfaceView
 import org.bukkit.event.block.Action
 import org.bukkit.event.inventory.InventoryCloseEvent
 import org.bukkit.inventory.ItemStack
@@ -84,6 +86,9 @@ public open class InterfaceProperties<P : Pane> {
     /** Keeps items placed by any pre-processor unchanged. */
     public var dontOverrideItems: Boolean = false
 
+    /** Managed containers return contents synchronously during the actual Bukkit close/switch event. */
+    internal var returnManagedItemsOnClose: Boolean = false
+
     // --- CUSTOM HANDLER ---
     /** All close handlers on this interface mapped by closing reason. */
     public val closeHandlers: Map<InventoryCloseEvent.Reason, List<CloseHandler>>
@@ -106,11 +111,23 @@ public open class InterfaceProperties<P : Pane> {
 
     /** Gives all items in modifiable slots back to players when closed, unless they were already present. */
     public fun returnPlacedIntoInventoryOnClose() {
+        returnManagedItemsOnClose = true
         addUnconditionalCloseHandler { _, view ->
-            view.completedPane?.forEach { row, column, element ->
-                if (!element.isSlotModifiable || element.itemStack != null) return@forEach
-                val item = view.inventory?.get(row, column) ?: return@forEach
-                view.player.inventory.addItem(item)
+            if (view is ContainerInterfaceView<*, *> && view.backing.builder.manageItems) return@addUnconditionalCloseHandler
+            InterfacesListeners.INSTANCE.runSync {
+                val items = buildList {
+                    view.completedPane?.forEach { row, column, element ->
+                        if (!element.isSlotModifiable || element.itemStack != null) return@forEach
+                        val item = view.inventory?.get(row, column)?.clone() ?: return@forEach
+                        view.inventory?.set(row, column, null)
+                        add(item)
+                    }
+                }
+                for (item in items) {
+                    for (leftover in view.player.inventory.addItem(item).values) {
+                        view.player.world.dropItemNaturally(view.player.location, leftover)
+                    }
+                }
             }
         }
     }

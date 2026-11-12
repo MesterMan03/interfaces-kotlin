@@ -1,6 +1,7 @@
 package com.noxcrew.interfaces.interfaces
 
 import com.noxcrew.interfaces.pane.ContainerPane
+import com.noxcrew.interfaces.view.ContainerInterfaceView
 import net.kyori.adventure.text.Component
 import org.bukkit.entity.Player
 
@@ -22,6 +23,15 @@ public abstract class ContainerInterfaceBuilder<P : ContainerPane, I : Container
 
     /** The type of player inventory being included. */
     public var playerInventoryType: PlayerInventoryType = PlayerInventoryType.DEFAULT
+
+    /**
+     * Owns the contents of modifiable top slots independently of transforms and routes shift/double clicks safely.
+     * Only real chest inventories with an unmodified player inventory are supported. Disabled for legacy menus.
+     */
+    public var manageItems: Boolean = false
+
+    /** Runs on the server thread after actual item changes, coalesced per tick, while this managed view is open. */
+    public var onItemsChanged: (ContainerInterfaceView<*, *>) -> Unit = {}
 
     /** Supplies the title of this interface. */
     public var titleSupplier: (suspend (Player) -> Component?)? = null

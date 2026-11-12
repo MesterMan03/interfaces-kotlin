@@ -13,6 +13,7 @@ import com.noxcrew.interfaces.exception.InterfacesOperation
 import com.noxcrew.interfaces.grid.GridPoint
 import com.noxcrew.interfaces.grid.mapping.PlayerInventoryGridMapper
 import com.noxcrew.interfaces.interfaces.PlayerInventoryType
+import com.noxcrew.interfaces.inventory.ManagedInventoryInteractions
 import com.noxcrew.interfaces.inventory.clearInventory
 import com.noxcrew.interfaces.menu.MenuOpenOperation
 import com.noxcrew.interfaces.utilities.InterfacesCoroutineDetails
@@ -158,6 +159,8 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     )
 
     private val logger = LoggerFactory.getLogger(InterfacesListeners::class.java)
+
+    private val managedInteractions = ManagedInventoryInteractions(plugin)
 
     private val spamPrevention: Cache<UUID, Unit> = Caffeine.newBuilder()
         .expireAfterWrite(200.toLong(), TimeUnit.MILLISECONDS)
@@ -326,6 +329,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         // are currently opening this view!
         val openView = openInventory[event.player]
         if (openView != null && openView != view) {
+            (openView as? ContainerInterfaceView<*, *>)?.returnManagedItems()
             // If the previously opened view is a player interface, attempt to demote it to
             // the background interface and gracefully close it while marking it as re-openable
             // again after we're done.
@@ -394,6 +398,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         // Mark whatever inventory was open as closed!
         val opened = openInventory.remove(event.player)
         if (opened != null) {
+            (opened as? ContainerInterfaceView<*, *>)?.returnManagedItems()
             opened.markClosed(SCOPE, reason)
         } else if (reason in REOPEN_REASONS && !event.player.isDead) {
             // If the opened menu didn't trigger a re-open, do it manually! This is necessary if it wasn't
@@ -407,6 +412,9 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         // Try to get the view of the top inventory first but fall back to the clicked inventory in specific
         val mainView = determineInventoryHolder(event.inventory)
         val view = mainView ?: determineInventoryHolder(event.clickedInventory ?: event.inventory) ?: return
+
+        // Managed containers run at HIGHEST so another plugin's cancellation is respected before items are transferred.
+        if (view is ContainerInterfaceView<*, *> && view.backing.builder.manageItems) return
 
         // If we are using a fallback player view we need to adjust the raw slot to include the 9 regular player inventory top slots
         val clickedPoint =
@@ -575,6 +583,7 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public fun onDrag(event: InventoryDragEvent) {
         val view = determineInventoryHolder(event.inventory) ?: return
+        if (view is ContainerInterfaceView<*, *> && view.backing.builder.manageItems) return
         for (slot in event.rawSlots) {
             val clickedPoint = GridPoint.fromBukkitChestSlot(slot) ?: continue
             if (!canFreelyMove(view, clickedPoint, slot >= event.inventory.size)) {
@@ -584,11 +593,41 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
         }
     }
 
+    /** Applies managed transfers only after normal plugin inventory guards have run. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public fun onManagedClick(event: InventoryClickEvent) {
+        val view = determineInventoryHolder(event.inventory) as? ContainerInterfaceView<*, *> ?: return
+        if (!view.backing.builder.manageItems) return
+        if (event.rawSlot < 0) return
+        if (event.rawSlot >= event.view.topInventory.size || view.isManagedSlot(event.rawSlot) || event.click == ClickType.DOUBLE_CLICK) {
+            managedInteractions.click(event, view)
+            return
+        }
+
+        // Protected slots retain normal UI callbacks, but no native operation may extract their display stacks.
+        event.isCancelled = true
+        val point = view.backing.mapper.toGridPoint(event.rawSlot) ?: return
+        handleClick(
+            view, point, event.click, isPlayerInventory = false, interact = false,
+            numberKey = event.hotbarButton.takeIf { it >= 0 },
+        )
+    }
+
+    /** Validates every slot touched by a managed drag, including drags spanning both inventories. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public fun onManagedDrag(event: InventoryDragEvent) {
+        val view = determineInventoryHolder(event.inventory) as? ContainerInterfaceView<*, *> ?: return
+        if (view.backing.builder.manageItems) managedInteractions.drag(event, view)
+    }
+
     /** Clean up everything for a player on disconnect. */
     @EventHandler(priority = EventPriority.HIGH)
     public fun onPlayerQuit(event: PlayerQuitEvent) {
         val playerId = event.player.uniqueId
-        openInventory.remove(event.player)?.markClosed(SCOPE, Reason.DISCONNECT)
+        openInventory.remove(event.player)?.also {
+            (it as? ContainerInterfaceView<*, *>)?.returnManagedItems()
+            it.markClosed(SCOPE, Reason.DISCONNECT)
+        }
         abortQuery(playerId, null)
         renderingPlayerInterfaceViews.remove(playerId)?.close(SCOPE, Reason.DISCONNECT)
         backgroundPlayerInterfaceViews.remove(playerId)?.close(SCOPE, Reason.DISCONNECT)
@@ -763,6 +802,10 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
 
     /** Returns whether [clickedPoint] in [view] can be freely moved. */
     private fun canFreelyMove(view: AbstractInterfaceView<*, *, *>, clickedPoint: GridPoint, isPlayerInventory: Boolean): Boolean {
+        if (view is ContainerInterfaceView<*, *> && view.backing.builder.manageItems) {
+            return isPlayerInventory || view.isManagedSlot(clickedPoint.x * 9 + clickedPoint.y)
+        }
+
         // If this inventory has no player inventory then the player inventory is always allowed to be edited
         if (!view.backing.includesPlayerInventory && isPlayerInventory) {
             return true

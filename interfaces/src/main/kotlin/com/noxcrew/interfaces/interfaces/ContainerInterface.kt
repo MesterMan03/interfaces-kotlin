@@ -12,6 +12,12 @@ public abstract class ContainerInterface<I : ContainerInterface<I, P>, P : Conta
     override val builder: ContainerInterfaceBuilder<P, I>,
 ) : Interface<I, P>, TitledInterface {
 
+    init {
+        require(!builder.manageItems || builder.playerInventoryType == PlayerInventoryType.DEFAULT) {
+            "Managed items require a real chest inventory and the unmodified player inventory"
+        }
+    }
+
     /** A simple instance of a container interface. */
     public class Simple(builder: ContainerInterfaceBuilder.Simple) :
         ContainerInterface<Simple, ContainerPane>(builder) {

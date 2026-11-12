@@ -16,6 +16,8 @@ public class ModifableAreaExampleInterface : RegistrableInterface {
     override fun create(): Interface<*, *> = buildChestInterface {
         rows = 6
         preventClickingEmptySlots = false
+        manageItems = true
+        onItemsChanged = { it.redrawComplete() }
 
         // Drop items that are placed in the modifiable slots!
         returnPlacedIntoInventoryOnClose()
@@ -39,6 +41,10 @@ public class ModifableAreaExampleInterface : RegistrableInterface {
 
             for (slot in usableSlots) {
                 pane[slot] = StaticElement(Drawable.empty(), isSlotModifiable = true)
+            }
+
+            pane[5, 4] = StaticElement(drawable(ItemStack(Material.CLOCK).name("redraw without changing stored items"))) {
+                it.view.redrawComplete()
             }
         }
     }
