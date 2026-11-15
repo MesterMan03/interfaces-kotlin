@@ -11,12 +11,30 @@ import org.bukkit.event.inventory.InventoryAction
 import org.bukkit.event.inventory.InventoryClickEvent
 import org.bukkit.event.inventory.InventoryDragEvent
 import org.bukkit.event.inventory.InventoryType
+import org.bukkit.event.player.PlayerSwapHandItemsEvent
 import org.bukkit.inventory.ItemStack
 import org.bukkit.plugin.Plugin
 
 /** Routes transfers for real chest inventories without letting display elements become transfer targets. */
 internal class ManagedInventoryInteractions(private val plugin: Plugin) {
     private val pendingUpdates = mutableSetOf<ContainerInterfaceView<*, *>>()
+
+    /** World-style swaps bypass container clicks, but must obey both raw player-slot policies. */
+    fun swapHands(event: PlayerSwapHandItemsEvent, view: ContainerInterfaceView<*, *>) {
+        val inventory = view.player.inventory
+        val topSize = view.player.openInventory.topInventory.size
+        val mainPolicy = policy(view, topSize + 27 + inventory.heldItemSlot)
+        val offPolicy = policy(view, topSize + 36)
+        fun allowed(item: ItemStack, source: ManagedSlotPolicy, target: ManagedSlotPolicy): Boolean =
+            item.isEmpty || (source.mayExtract(item) && target.mayInsert(item) && item.amount <= target.capacity)
+        if (!allowed(inventory.itemInMainHand, mainPolicy, offPolicy) ||
+            !allowed(inventory.itemInOffHand, offPolicy, mainPolicy)
+        ) {
+            event.isCancelled = true
+            return
+        }
+        queueUpdate(view)
+    }
 
     /** Handles item movement; protected button clicks remain the responsibility of the normal click handler. */
     fun click(event: InventoryClickEvent, view: ContainerInterfaceView<*, *>) {

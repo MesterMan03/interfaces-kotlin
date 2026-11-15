@@ -710,6 +710,11 @@ public class InterfacesListeners private constructor(private val plugin: Plugin)
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public fun onSwapHands(event: PlayerSwapHandItemsEvent) {
         val player = event.player
+        val container = determineInventoryHolder(player.openInventory.topInventory) as? ContainerInterfaceView<*, *>
+        if (container != null && container.backing.builder.manageItems) {
+            managedInteractions.swapHands(event, container)
+            return
+        }
         val view = getOpenPlayerInterface(player.uniqueId) ?: return
         val slot = player.inventory.heldItemSlot
         val interactedSlot1 = GridPoint.at(3, slot)
